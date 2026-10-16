@@ -83,12 +83,6 @@ body.ui .fab,body.open .fab{opacity:.85;pointer-events:auto}
 <aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Einstellungen"></aside>
 
 <script>
-/* Feste Werte für das Verhalten (bei Bedarf hier ändern) */
-const FADE_SECONDS = 2;   /* Ein- und Ausblenden */
-const PAUSE_SECONDS = 1;  /* Pause im Dunkeln, bevor die Uhr woanders auftaucht */
-const MIN_JUMP = 0.45;    /* Mindestabstand zur letzten Stelle (Anteil der möglichen Strecke, 0–1) */
-const REMEMBER = 6;       /* so viele letzte Stellen werden gemerkt und gemieden */
-
 const hours=(n)=>"h"+n;
 const L={};
 
@@ -136,11 +130,13 @@ const hexOk=v=>/^#[0-9a-f]{6}$/i.test(v);
 
 /* ---------- Zustand ---------- */
 const KEY="wortuhr-schoner";
-let st={lang:"de",size:"m",show:25,wall:"#000000",front:"#15171a"};
+/* Grenzen und Standardwerte der Regler: [min, max, standard] */
+const LIMITS={show:[5,120,25],fade:[0,10,2],pause:[0,30,1],jump:[0,90,45],remember:[1,15,6]};
+let st={lang:"de",size:"m",show:25,fade:2,pause:1,jump:45,remember:6,wall:"#000000",front:"#15171a"};
 try{const s=JSON.parse(localStorage.getItem(KEY)||"null");if(s)Object.assign(st,s)}catch(e){}
 if(!L[st.lang])st.lang="de";
 if(!SIZES[st.size])st.size="m";
-st.show=Math.min(120,Math.max(5,Math.round(+st.show)||25));
+for(const k in LIMITS){const[a,b,d]=LIMITS[k];let v=Math.round(+st[k]);if(!isFinite(v))v=d;st[k]=Math.min(b,Math.max(a,v))}
 if(!hexOk(st.wall))st.wall="#000000";if(!hexOk(st.front))st.front="#15171a";
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}};
 
@@ -173,12 +169,13 @@ function applySize(){const z=SIZES[st.size];frame.style.setProperty("--s","min("
 render();setInterval(render,1000);
 
 /* ---------- Auftauchen an wechselnden Stellen ---------- */
-frame.style.transition="opacity "+FADE_SECONDS+"s ease";
+function applyFade(){frame.style.transition="opacity "+st.fade+"s ease"}
+applyFade();
 const history=[];
 function range(){return{mx:Math.max(0,innerWidth-frame.offsetWidth),my:Math.max(0,innerHeight-frame.offsetHeight)}}
 function pickSpot(){
   const{mx,my}=range(),span=Math.hypot(mx,my)||1,w=frame.offsetWidth;
-  const minLast=MIN_JUMP*span,minHist=Math.min(w*.9,span*.5);
+  const minLast=st.jump/100*span,minHist=Math.min(w*.9,span*.5);
   const dist=(p,q)=>Math.hypot(p.x-q.x,p.y-q.y);
   let best=null,bestScore=-1;
   for(let i=0;i<200;i++){
@@ -193,7 +190,7 @@ function pickSpot(){
 }
 function place(){
   const c=pickSpot();
-  history.push(c);if(history.length>REMEMBER)history.shift();
+  history.push(c);while(history.length>st.remember)history.shift();
   frame.style.transform="translate3d("+Math.round(c.x)+"px,"+Math.round(c.y)+"px,0)";
 }
 let timers=[];
@@ -205,8 +202,8 @@ function cycle(){
   frame.style.opacity="1";
   later(()=>{
     frame.style.opacity="0";
-    later(cycle,(FADE_SECONDS+PAUSE_SECONDS)*1000);
-  },(FADE_SECONDS+st.show)*1000);
+    later(cycle,(st.fade+st.pause)*1000);
+  },(st.fade+st.show)*1000);
 }
 addEventListener("resize",()=>{history.length=0;place()});
 
@@ -242,7 +239,22 @@ const h=(t,a={},...k)=>{const e=document.createElement(t);
   k.flat().forEach(c=>e.append(c));return e};
 const sheet=document.getElementById("sheet"),gear=document.getElementById("gear");
 const langBtns={},sizeBtns={},wallBtns=[],frontBtns=[];
-let fsBtn,wallPick,frontPick,showRange,showVal;
+let fsBtn,wallPick,frontPick;
+const sliders=[];
+const SL=[
+ {k:"show",n:"Sichtbar pro Stelle",u:" Sekunden",step:5},
+ {k:"fade",n:"Ein- und Ausblenden",u:" Sekunden",step:1},
+ {k:"pause",n:"Pause im Dunkeln",u:" Sekunden",step:1},
+ {k:"jump",n:"Mindestabstand zur letzten Stelle",u:" %",step:5},
+ {k:"remember",n:"Gemerkte frühere Stellen",u:"",step:1}];
+function slider(o){
+  const[a,b]=LIMITS[o.k];
+  const val=h("div",{class:"val"});
+  const inp=h("input",{type:"range",class:"range",min:a,max:b,step:o.step,value:st[o.k],"aria-label":o.n,
+    oninput:e=>{st[o.k]=+e.target.value;save();if(o.k==="fade")applyFade();syncUI()}});
+  sliders.push({o,val,inp});
+  return h("div",{style:"margin-bottom:14px"},val,inp);
+}
 
 function swatches(list,key,btns,apply,pickEl){
   return h("div",{class:"sws"},
@@ -253,9 +265,6 @@ function swatches(list,key,btns,apply,pickEl){
 function buildSheet(){
   wallPick=h("input",{type:"color",value:st.wall,"aria-label":"Eigene Hintergrundfarbe",oninput:e=>{st.wall=e.target.value;save();applyWall();syncUI()}});
   frontPick=h("input",{type:"color",value:st.front,"aria-label":"Eigene Uhrfarbe",oninput:e=>{st.front=e.target.value;save();applyFront();syncUI()}});
-  showVal=h("div",{class:"val"});
-  showRange=h("input",{type:"range",class:"range",min:5,max:120,step:5,value:st.show,"aria-label":"Sichtbar pro Stelle in Sekunden",
-    oninput:e=>{st.show=+e.target.value;save();syncUI()}});
   fsBtn=h("button",{id:"fsBtn",class:"pill",onclick:toggleFs},"Vollbild");
   sheet.append(
     h("header",{},h("h2",{},"Einstellungen"),h("button",{class:"x","aria-label":"Schließen",onclick:closeSheet},"×")),
@@ -264,7 +273,9 @@ function buildSheet(){
     h("h3",{},"Größe der Uhr"),
     h("div",{class:"row"},Object.keys(SIZES).map(k=>{const b=h("button",{class:"pill","aria-pressed":"false",
       onclick:()=>{st.size=k;save();applySize();history.length=0;place();syncUI()}},SIZES[k].n);sizeBtns[k]=b;return b})),
-    h("h3",{},"Sichtbar pro Stelle"),showVal,showRange,
+    h("h3",{},"Wechsel der Stelle"),...SL.map(o=>slider(o)),
+    h("div",{class:"row"},h("button",{class:"pill",onclick:()=>{
+      for(const k in LIMITS)st[k]=LIMITS[k][2];save();applyFade();syncUI()}},"Zurücksetzen")),
     h("h3",{},"Hintergrundfarbe"),swatches(WALLS,"wall",wallBtns,applyWall,wallPick),
     h("h3",{},"Uhrfarbe"),swatches(FRONTS,"front",frontBtns,applyFront,frontPick),
     h("h3",{},"Anzeige"),h("div",{class:"row"},fsBtn)
@@ -276,7 +287,7 @@ function syncUI(){
   wallBtns.forEach(b=>b.setAttribute("aria-pressed",b.dataset.c===st.wall));
   frontBtns.forEach(b=>b.setAttribute("aria-pressed",b.dataset.c===st.front));
   if(wallPick)wallPick.value=st.wall;if(frontPick)frontPick.value=st.front;
-  if(showRange){showRange.value=st.show;showVal.textContent=st.show+" Sekunden an einer Stelle"}
+  sliders.forEach(({o,val,inp})=>{inp.value=st[o.k];val.textContent=o.n+": "+st[o.k]+o.u});
   if(fsBtn)fsBtn.textContent=fsEl()?"Vollbild beenden":"Vollbild";
 }
 /* Während das Menü offen ist, bleibt die Uhr sichtbar (zur Vorschau); beim Schließen geht der Wechsel weiter */
